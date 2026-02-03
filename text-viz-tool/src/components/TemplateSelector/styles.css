@@ -1,0 +1,13 @@
+.template-card {
+  transition: all 0.3s ease;
+  cursor: pointer;
+}
+
+.template-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.template-card.selected {
+  box-shadow: 0 4px 16px rgba(24, 144, 255, 0.3);
+}

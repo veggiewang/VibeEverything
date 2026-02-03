@@ -1,0 +1,41 @@
+#root {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.ant-layout-header {
+  line-height: 64px;
+}
+
+.ant-layout-header h2 {
+  line-height: 64px;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .ant-layout-header h2 {
+    font-size: 20px;
+  }
+
+  .ant-layout-content {
+    padding: 16px !important;
+  }
+}
+
+/* 平滑过渡 */
+.ant-card {
+  transition: all 0.3s ease;
+}
+
+/* 可视化容器样式 */
+.visualization-container {
+  background: white;
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
