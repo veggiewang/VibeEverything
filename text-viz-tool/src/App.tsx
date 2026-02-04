@@ -1,5 +1,6 @@
 import { Layout, Typography, Space, Spin, Alert } from 'antd';
 import { TextInput } from './components/TextInput';
+import { DataEditor } from './components/DataEditor';
 import { TemplateSelector } from './components/TemplateSelector';
 import { VisualizationContainer } from './components/Visualizations';
 import { ExportPanel } from './components/ExportPanel';
@@ -10,7 +11,7 @@ const { Header, Content, Footer } = Layout;
 const { Title, Text } = Typography;
 
 function App() {
-  const { isLoading, error, currentVisualization } = useAppStore();
+  const { isLoading, error, parsedData, currentVisualization } = useAppStore();
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -44,7 +45,12 @@ function App() {
 
               <TextInput />
 
-              <TemplateSelector />
+              {parsedData && (
+                <>
+                  <DataEditor />
+                  <TemplateSelector />
+                </>
+              )}
 
               {currentVisualization && (
                 <>
