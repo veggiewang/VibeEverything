@@ -19,12 +19,21 @@ const ENGLISH_STOPWORDS = new Set([
   'their', 'they', 'them', 'there', 'when', 'where', 'who', 'whom', 'whose', 'why', 'how'
 ]);
 
+// 常见专业术语词库（AI/科技领域）
+const DOMAIN_TERMS = new Set([
+  '人工智能', '深度学习', '机器学习', '神经网络', '自然语言处理', '计算机视觉',
+  '大数据', '云计算', '物联网', '区块链', '量子计算', '边缘计算',
+  '语言模型', '生成式', '多模态', '强化学习', '迁移学习', '对抗网络',
+  '卷积网络', '循环网络', '注意力机制', '预训练模型'
+]);
+
 export interface ParseOptions {
   customKeywords?: string[]; // 用户自定义关键词
   minWordLength?: number;    // 最小词长
   maxKeywords?: number;      // 最大关键词数
   extractEvents?: boolean;   // 是否提取事件
   sortByTime?: boolean;      // 是否按时间排序
+  minFrequency?: number;     // 最小词频（用于过滤噪音）
 }
 
 /**
@@ -41,6 +50,7 @@ export async function parseText(text: string, options: ParseOptions = {}): Promi
     maxKeywords = 50,
     extractEvents = true,
     sortByTime = true,
+    minFrequency = 1,
   } = options;
 
   try {
@@ -56,8 +66,13 @@ export async function parseText(text: string, options: ParseOptions = {}): Promi
       sortedSentences = sortSentencesByTime(sentences, dates);
     }
 
-    // 4. 提取关键词
-    const keywords = extractKeywords(text, { customKeywords, minWordLength, maxKeywords });
+    // 4. 提取关键词（使用优化后的算法）
+    const keywords = extractKeywords(text, {
+      customKeywords,
+      minWordLength,
+      maxKeywords,
+      minFrequency,
+    });
 
     // 5. 提取事件
     const events = extractEvents ? extractEventsFromText(text, dates, sortedSentences) : [];
@@ -81,7 +96,8 @@ export async function parseText(text: string, options: ParseOptions = {}): Promi
 }
 
 /**
- * 改进的分词算法
+ * 改进的分词算法（V3.0）
+ * 使用词频过滤 + 长词优先策略
  */
 function tokenize(text: string): string[] {
   const words: string[] = [];
@@ -90,11 +106,11 @@ function tokenize(text: string): string[] {
   const years = text.match(/\d{4}年?/g) || [];
   years.forEach((year) => words.push(year.replace('年', '')));
 
-  // 2. 提取日期（如2023年1月、3月等）
-  const dates = text.match(/\d{1,2}月\d{1,2}日?/g) || [];
-  words.push(...dates);
+  // 2. 提取数字（包括小数、百分比等）
+  const numbers = text.match(/\d+\.?\d*[万亿百千兆%]?/g) || [];
+  words.push(...numbers);
 
-  // 3. 提取英文单词和专有名词（包括连字符和数字）
+  // 3. 提取英文单词和专有名词
   const englishWords = text.match(/[A-Z][a-z]+(?:[A-Z][a-z]+)*/g) || []; // 驼峰命名
   const normalWords = text.match(/[a-zA-Z]+(?:-[a-zA-Z]+)*/g) || []; // 普通单词和连字符
   const acronyms = text.match(/[A-Z]{2,}/g) || []; // 大写缩写
@@ -107,48 +123,91 @@ function tokenize(text: string): string[] {
     ...wordsWithNumbers
   );
 
-  // 4. 提取中文词语（改进的算法）
-  // 移除已经提取的部分，只保留纯中文
-  let chineseText = text;
-  chineseText = chineseText.replace(/\d{4}年?/g, ' ');
-  chineseText = chineseText.replace(/\d{1,2}月\d{1,2}日?/g, ' ');
-  chineseText = chineseText.replace(/[a-zA-Z0-9\s\-]+/g, ' ');
-  chineseText = chineseText.replace(/[^\u4e00-\u9fa5]/g, '');
-
-  // 使用多种长度的组合提取中文词
-  const chineseWords = new Set<string>();
-
-  // 4字词（优先，因为更准确）
-  for (let i = 0; i <= chineseText.length - 4; i++) {
-    const word = chineseText.substring(i, i + 4);
-    chineseWords.add(word);
-  }
-
-  // 3字词
-  for (let i = 0; i <= chineseText.length - 3; i++) {
-    const word = chineseText.substring(i, i + 3);
-    chineseWords.add(word);
-  }
-
-  // 2字词
-  for (let i = 0; i <= chineseText.length - 2; i++) {
-    const word = chineseText.substring(i, i + 2);
-    chineseWords.add(word);
-  }
-
-  words.push(...Array.from(chineseWords));
+  // 4. 提取中文词语（优化版）
+  const chineseWords = extractChineseWords(text);
+  words.push(...chineseWords);
 
   return words;
 }
 
 /**
- * 提取关键词
+ * 提取中文词语（使用词频过滤和长词优先策略）
+ */
+function extractChineseWords(text: string): string[] {
+  // 移除非中文字符，只保留纯中文
+  let chineseText = text;
+  chineseText = chineseText.replace(/[^\u4e00-\u9fa5]/g, '');
+
+  if (chineseText.length === 0) return [];
+
+  // 第一步：生成所有可能的词（2-5字）
+  const allCandidates = new Map<string, number>();
+
+  for (let len = 5; len >= 2; len--) {
+    for (let i = 0; i <= chineseText.length - len; i++) {
+      const word = chineseText.substring(i, i + len);
+      allCandidates.set(word, (allCandidates.get(word) || 0) + 1);
+    }
+  }
+
+  // 第二步：词频过滤 - 只保留出现次数 >= 2 或者在专业词库中的词
+  const frequentWords = new Map<string, number>();
+  allCandidates.forEach((count, word) => {
+    if (count >= 2 || DOMAIN_TERMS.has(word)) {
+      frequentWords.set(word, count);
+    }
+  });
+
+  // 第三步：长词优先 - 如果一个词是另一个词的子串，优先保留长词
+  const finalWords = new Set<string>();
+  const sortedWords = Array.from(frequentWords.keys()).sort((a, b) => b.length - a.length);
+
+  for (const word of sortedWords) {
+    // 检查是否已经有更长的词包含这个词
+    let isSubstring = false;
+    for (const existing of finalWords) {
+      if (existing.includes(word) && existing !== word) {
+        isSubstring = true;
+        break;
+      }
+    }
+
+    if (!isSubstring) {
+      finalWords.add(word);
+    }
+  }
+
+  // 第四步：再次过滤单字词和短词（除非出现频率很高）
+  const result: string[] = [];
+  finalWords.forEach((word) => {
+    const count = frequentWords.get(word) || 0;
+    // 2字词需要出现2次以上，3字以上词保留，或者是专业术语
+    if (word.length >= 3 || count >= 2 || DOMAIN_TERMS.has(word)) {
+      result.push(word);
+    }
+  });
+
+  return result;
+}
+
+/**
+ * 提取关键词（优化版）
  */
 function extractKeywords(
   text: string,
-  options: { customKeywords?: string[]; minWordLength?: number; maxKeywords?: number } = {}
+  options: {
+    customKeywords?: string[];
+    minWordLength?: number;
+    maxKeywords?: number;
+    minFrequency?: number;
+  } = {}
 ): KeywordData[] {
-  const { customKeywords = [], minWordLength = 2, maxKeywords = 50 } = options;
+  const {
+    customKeywords = [],
+    minWordLength = 2,
+    maxKeywords = 50,
+    minFrequency = 1,
+  } = options;
 
   const words = tokenize(text);
   const wordCount = new Map<string, number>();
@@ -168,15 +227,37 @@ function extractKeywords(
     }
   });
 
+  // 添加专业术语（如果在文本中出现）
+  DOMAIN_TERMS.forEach((term) => {
+    if (text.includes(term)) {
+      const count = (text.match(new RegExp(term, 'g')) || []).length;
+      wordCount.set(term, count);
+    }
+  });
+
+  // 词频过滤：只保留出现次数 >= minFrequency 的词
+  const filteredWords = new Map<string, number>();
+  wordCount.forEach((count, word) => {
+    if (count >= minFrequency) {
+      filteredWords.set(word, count);
+    }
+  });
+
   // 转换为 KeywordData 数组并排序
-  const maxCount = Math.max(...wordCount.values(), 1);
-  const keywords = Array.from(wordCount.entries())
+  const maxCount = Math.max(...filteredWords.values(), 1);
+  const keywords = Array.from(filteredWords.entries())
     .map(([word, count]) => ({
       word,
       count,
       weight: count / maxCount,
     }))
-    .sort((a, b) => b.count - a.count)
+    .sort((a, b) => {
+      // 优先按词频排序，词频相同时按词长排序（长词优先）
+      if (b.count !== a.count) {
+        return b.count - a.count;
+      }
+      return b.word.length - a.word.length;
+    })
     .slice(0, maxKeywords);
 
   return keywords;
@@ -190,22 +271,22 @@ function isStopword(word: string): boolean {
 }
 
 /**
- * 提取日期（改进版）
+ * 提取日期（V3.0 增强版）
+ * 支持完整的中文日期格式
  */
 function extractDates(text: string): DateData[] {
   const dates: DateData[] = [];
   const seenDates = new Set<string>();
 
   try {
-    // 使用 chrono-node 解析日期
+    // 1. 使用 chrono-node 解析英文日期
     const parsedDates = chrono.parse(text, new Date(), { forwardDate: true });
 
     parsedDates.forEach((parsed) => {
       if (parsed.start) {
         const date = parsed.start.date();
-        const dateKey = date.toISOString();
+        const dateKey = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
 
-        // 避免重复
         if (!seenDates.has(dateKey)) {
           seenDates.add(dateKey);
           dates.push({
@@ -217,14 +298,16 @@ function extractDates(text: string): DateData[] {
       }
     });
 
-    // 额外处理中文年份格式
-    const chineseYearPattern = /(\d{4})年/g;
+    // 2. 处理中文日期格式："2016年3月"、"2022年11月"
+    const yearMonthPattern = /(\d{4})年(\d{1,2})月/g;
     let match;
-    while ((match = chineseYearPattern.exec(text)) !== null) {
+    while ((match = yearMonthPattern.exec(text)) !== null) {
       const year = parseInt(match[1]);
-      if (year >= 1900 && year <= 2100) {
-        const date = new Date(year, 0, 1);
-        const dateKey = date.toISOString();
+      const month = parseInt(match[2]);
+
+      if (year >= 1900 && year <= 2100 && month >= 1 && month <= 12) {
+        const date = new Date(year, month - 1, 1); // month-1 因为 JS 月份从0开始
+        const dateKey = `${year}-${month - 1}-1`;
 
         if (!seenDates.has(dateKey)) {
           seenDates.add(dateKey);
@@ -236,6 +319,49 @@ function extractDates(text: string): DateData[] {
         }
       }
     }
+
+    // 3. 处理纯年份格式："2012年"（只在没有月份时才添加）
+    const yearOnlyPattern = /(\d{4})年(?!\d{1,2}月)/g;
+    while ((match = yearOnlyPattern.exec(text)) !== null) {
+      const year = parseInt(match[1]);
+
+      if (year >= 1900 && year <= 2100) {
+        const date = new Date(year, 0, 1);
+        const dateKey = `${year}-0-1`;
+
+        if (!seenDates.has(dateKey)) {
+          seenDates.add(dateKey);
+          dates.push({
+            date,
+            text: match[0],
+            context: getContext(text, match.index, 80),
+          });
+        }
+      }
+    }
+
+    // 4. 处理"年月日"格式："2022年11月30日"
+    const fullDatePattern = /(\d{4})年(\d{1,2})月(\d{1,2})日/g;
+    while ((match = fullDatePattern.exec(text)) !== null) {
+      const year = parseInt(match[1]);
+      const month = parseInt(match[2]);
+      const day = parseInt(match[3]);
+
+      if (year >= 1900 && year <= 2100 && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        const date = new Date(year, month - 1, day);
+        const dateKey = `${year}-${month - 1}-${day}`;
+
+        if (!seenDates.has(dateKey)) {
+          seenDates.add(dateKey);
+          dates.push({
+            date,
+            text: match[0],
+            context: getContext(text, match.index, 80),
+          });
+        }
+      }
+    }
+
   } catch (error) {
     console.error('日期提取错误:', error);
   }
@@ -261,7 +387,8 @@ function extractEventsFromText(_text: string, dates: DateData[], sentences: stri
   const eventKeywords = [
     '发生', '举行', '完成', '开始', '结束', '发布', '启动', '召开', '宣布',
     '成立', '推出', '上线', '问世', '诞生', '突破', '战胜', '击败', '取得',
-    '实现', '达成', '创造', '建立', '发现', '提出', '研发'
+    '实现', '达成', '创造', '建立', '发现', '提出', '研发', '大放异彩', '震惊',
+    '改变', '展现', '引发', '渗透', '融入'
   ];
 
   sentences.forEach((sentence, index) => {
@@ -326,7 +453,7 @@ function sortSentencesByTime(sentences: string[], dates: DateData[]): string[] {
   const withDate = sentencesWithDate.filter((s) => s.date);
   const withoutDate = sentencesWithDate.filter((s) => !s.date);
 
-  withDate.sort((a, b) => (a.date! .getTime() - b.date!.getTime()));
+  withDate.sort((a, b) => (a.date!.getTime() - b.date!.getTime()));
 
   return [...withDate.map((s) => s.sentence), ...withoutDate.map((s) => s.sentence)];
 }
